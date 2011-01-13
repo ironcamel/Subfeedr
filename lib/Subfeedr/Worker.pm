@@ -14,6 +14,8 @@ use Digest::SHA;
 
 our $FeedInterval = $ENV{SUBFEEDR_INTERVAL} || 60 * 15;
 
+my %subscriber_timer;
+
 sub start {
     my $self = shift;
 
@@ -112,7 +114,8 @@ sub notify {
     Subfeedr::DataStore->new('subscription')->sort($sha1, get => 'subscriber.*', sub {
         my $subs = shift;
         for my $subscriber (map JSON::decode_json($_), @$subs) {
-            undef $http_t;  #remove the previous timer
+            #remove the previous timer
+            undef $subscriber_timer{$subname};
 
             #Take the new entries and append them to the list of entries to be
             #posted to the subscriber
@@ -144,7 +147,7 @@ sub notify {
 
             #set a timer to post to the subscriber callback.  Try every 30
             #seconds until we can successfully post to it.
-            my $http_t; $http_t = AE::timer 0, 30, sub {
+            $subscriber_timer{$subname} = AE::timer 0, 30, sub {
                 $http_client->request($req, sub {
                         my $res = shift;
                         if ($res->is_error) {
@@ -153,7 +156,7 @@ sub notify {
                         } else {
                             #cancel the timer and empty the entry list for
                             #this subscriber
-                            undef $http_t;
+                            undef $subscriber_timer{$subname};
                             while (Subfeedr::DataStore
                                 ->new('subscriber_entries')
                                 ->lpop($subname)) {}
