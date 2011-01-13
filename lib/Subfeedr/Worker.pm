@@ -102,6 +102,7 @@ sub work_url {
 sub notify {
     my($self, $sha1, $url, $feed, $entries) = @_;
 
+    # assume that entries will only contain new updates from the feed
     my $how_many = @$entries;
     warn "Found $how_many entries for $url\n";
 
@@ -111,23 +112,54 @@ sub notify {
     Subfeedr::DataStore->new('subscription')->sort($sha1, get => 'subscriber.*', sub {
         my $subs = shift;
         for my $subscriber (map JSON::decode_json($_), @$subs) {
+            undef $http_t;  #remove the previous timer
+
+            #Take the new entries and append them to the list of entries to be
+            #posted to the subscriber
+            my $subname = $subscriber->{sha1};
+            for my $entry (@$entries) {
+                Subfeedr::DataStore->new('subscriber_entries')
+                    ->rpush($subname, $entry);
+            }
+
+            my $subscriber_entry_count = Subfeedr::DataStore
+                ->new('subscriber_entries')
+                ->llen($subname) - 1;
+            my @subscriber_entries = Subfeedr::DataStore
+                ->new('subscriber_entries')
+                ->lrange($subname, 0, $subscriber_entry_count);
+            my $subscriber_payload = $self
+                ->post_payload($feed, \@subscriber_entries);
+
             warn "POSTing updates for $url to $subscriber->{callback}\n";
             my $hmac = Digest::SHA::hmac_sha1_hex(
-                $payload, $subscriber->{secret});
+                $subscriber_payload, $subscriber->{secret});
             my $req = HTTP::Request->new(POST => $subscriber->{callback});
             $req->content_type($mime_type);
             $req->header('X-Hub-Signature' => "sha1=$hmac");
-            $req->content_length(length $payload);
-            $req->content($payload);
+            $req->content_length(length $subscriber_payload);
+            $req->content($subscriber_payload);
 
-            Tatsumaki::HTTPClient->new->request($req, sub {
-                my $res = shift;
-                if ($res->is_error) {
-                    warn $res->status_line;
-                    warn $res->content;
-                    # TODO retry
-                }
-            });
+            my $http_client = Tatsumaki::HTTPClient->new;
+
+            #set a timer to post to the subscriber callback.  Try every 30
+            #seconds until we can successfully post to it.
+            my $http_t; $http_t = AE::timer 0, 30, sub {
+                $http_client->request($req, sub {
+                        my $res = shift;
+                        if ($res->is_error) {
+                            warn $res->status_line;
+                            warn $res->content;
+                        } else {
+                            #cancel the timer and empty the entry list for
+                            #this subscriber
+                            undef $http_t;
+                            while (Subfeedr::DataStore
+                                ->new('subscriber_entries')
+                                ->lpop($subname)) {}
+                        }
+                });
+            };
         }
     });
 }
