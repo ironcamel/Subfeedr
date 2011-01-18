@@ -1,6 +1,11 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
+use lib '/root/scripts/Subfeedr/lib';
+
+#check if redis-server is up and running
+my $command = "pgrep redis-server > /dev/null";
+system($command) == 0 or die "redis-server not running\n";
 
 if (__FILE__ eq $0) {
     exec 'plackup', '--server', 'AnyEvent::HTTPD', '--app', $0, @ARGV;

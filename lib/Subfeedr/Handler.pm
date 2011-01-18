@@ -27,7 +27,7 @@ sub post {
     } else {
         $self->response->code(400);
         $self->write("hub.mode is invalid");
-        return;
+        return $self->finish('');
     }
 }
 
@@ -79,9 +79,12 @@ sub subscribe {
     my $topic    = $input->{'hub.topic'} || '';
     my $token    = $input->{'hub.verify_token'} || '';
     my $secret   = $input->{'hub.secret'} || '';
-    my $mode     = $input->{'hub.mode'} or die "Invalid hub.mode";
+    my $mode     = $input->{'hub.mode'} || '';
     my $lease_seconds = $input->{'hub.lease_seconds'} || 30 * 24 * 60 * 60;
 
+    unless ($mode) {
+        Tatsumaki::Error::HTTP->throw(400, "Invalid hub.mode");
+    }
     unless ($callback && is_valid_url($callback)) {
         Tatsumaki::Error::HTTP->throw(400, "Invalid parameter hub.callback");
     }
@@ -97,6 +100,7 @@ sub subscribe {
     Subfeedr::DataStore->new('subscription')->sismember($sha1_feed, $sha1_cb, $self->async_cb(sub {
         my $existent = shift;
         if ($mode eq 'unsubscribe' && !$existent) {
+            #TODO: remove from datastore
             $self->response->code(204);
             return $self->finish('');
         }
